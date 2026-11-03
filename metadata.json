@@ -1,5 +1,5 @@
 {
-  "name": "AI Career Navigator",
+  "name": "NexLeaf",
   "description": "Comprehensive AI-powered career roadmap, resume analyzer, skill gap analysis, and personalized career guidance platform.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

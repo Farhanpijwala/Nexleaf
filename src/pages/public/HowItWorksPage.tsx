@@ -93,7 +93,7 @@ export const HowItWorksPage: React.FC = () => {
           <div className="space-y-2 text-center sm:text-left">
             <h3 className="text-2xl font-bold">Experience the Guided Workflow</h3>
             <p className="text-sm text-indigo-200 max-w-xl">
-              Start with the resume analyzer or explore the pre-loaded demo account to see the system in action.
+              Start with the resume analyzer or explore career paths to see the system in action.
             </p>
           </div>
           <button

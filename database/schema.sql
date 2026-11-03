@@ -128,6 +128,9 @@ CREATE TABLE IF NOT EXISTS `career_assessments` (
   `status` ENUM('in_progress', 'completed') DEFAULT 'completed',
   `ai_fit_summary` TEXT NULL,
   `top_recommended_track` VARCHAR(100) NULL,
+  `fit_score` INT DEFAULT 0,
+  `radar_scores` JSON NULL,
+  `next_steps` JSON NULL,
   `completed_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT `fk_assessments_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB;
@@ -148,6 +151,7 @@ CREATE TABLE IF NOT EXISTS `career_matches` (
   `id` VARCHAR(36) PRIMARY KEY,
   `user_id` VARCHAR(36) NOT NULL,
   `career_title` VARCHAR(100) NOT NULL,
+  `career_slug` VARCHAR(100) NULL,
   `match_percentage` INT NOT NULL,
   `why_matches` TEXT NOT NULL,
   `matching_skills` JSON NOT NULL,
@@ -167,7 +171,7 @@ CREATE TABLE IF NOT EXISTS `skill_gaps` (
   `current_proficiency_pct` INT NOT NULL DEFAULT 0,
   `target_proficiency_pct` INT NOT NULL DEFAULT 100,
   `priority` ENUM('high', 'medium', 'low') DEFAULT 'medium',
-  `ai_advice` VARCHAR(255) NULL,
+  `ai_advice` TEXT NULL,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT `fk_gaps_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB;

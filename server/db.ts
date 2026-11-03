@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import bcrypt from 'bcryptjs';
 import { pool } from './mysql.js';
 import {
   User,
@@ -804,8 +803,15 @@ async getCareers(): Promise<Career[]> {
     averageSalary: career.average_salary,
     growthOutlook: career.growth_outlook,
     difficultyLevel: career.difficulty_level,
-    requiredSkills: career.required_skills || [],
-    recommendedSkills: career.recommended_skills || [],
+    // JSON_ARRAYAGG over the LEFT JOIN produces NULL entries for skills of
+    // the opposite type (and a lone [null] when a career has no skills yet),
+    // so strip anything that is not an actual skill name.
+    requiredSkills: Array.isArray(career.required_skills)
+      ? career.required_skills.filter((s: unknown): s is string => typeof s === 'string')
+      : [],
+    recommendedSkills: Array.isArray(career.recommended_skills)
+      ? career.recommended_skills.filter((s: unknown): s is string => typeof s === 'string')
+      : [],
     typicalResponsibilities: career.typical_responsibilities || [],
     toolsAndTechnologies: career.tools_and_technologies || []
   }));
@@ -855,14 +861,15 @@ async saveCareerMatches(
   for (const match of matches) {
     await pool.query(
       `INSERT INTO career_matches
-       (id, user_id, career_title, match_percentage, why_matches,
+       (id, user_id, career_title, career_slug, match_percentage, why_matches,
         matching_skills, missing_skills, learning_difficulty,
         recommended_next_step)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         match.id,
         userId,
         match.careerTitle,
+        match.slug,
         match.matchPercentage,
         match.whyMatches,
         JSON.stringify(match.currentMatchingSkills),
@@ -1100,7 +1107,7 @@ async saveRoadmap(roadmap: Roadmap): Promise<Roadmap> {
 
   const taskIndex = roadmap.tasks.findIndex((t) => t.id === taskId);
 
-  if (taskIndex === -1) return roadmap;
+  if (taskIndex === -1) return undefined;
 
   const updatedTask = {
     ...roadmap.tasks[taskIndex],
@@ -1476,7 +1483,7 @@ async getUserProgress(userId: string): Promise<UserProgressData> {
     skillsProgressPct,
     roadmapProgressPct,
     projectsCompletedCount,
-    totalProjectsTarget: 0,
+    totalProjectsTarget: 5,
     coursesCompletedCount: 0,
     learningHoursTotal,
     timelineHistory: history.map((item) => ({
@@ -1486,40 +1493,26 @@ async getUserProgress(userId: string): Promise<UserProgressData> {
       hours: Number(item.learning_hours_total || 0)
     }))
   };
-
-  // Get completed projects
-  const [projectRows] = await pool.query(
-    `SELECT COUNT(*) AS completed_count
-     FROM user_progress
-     WHERE user_id = ?
-       AND projects_completed_count > 0`,
-    [userId]
-  );
-
-  const projectData = projectRows as any[];
-
-
-  return {
-    overallCareerReadiness,
-    skillsProgressPct,
-    roadmapProgressPct,
-    projectsCompletedCount,
-    totalProjectsTarget: 5,
-    coursesCompletedCount: 0,
-    learningHoursTotal,
-    timelineHistory: history.map((p) => ({
-      date: p.snapshot_date,
-      readiness: p.career_readiness_pct,
-      skillsCount: p.skills_completed_count,
-      hours: Number(p.learning_hours_total)
-    }))
-  };
 }
 async saveUserProgress(
   userId: string,
   data: UserProgressData
 ): Promise<UserProgressData> {
   const today = new Date().toISOString().slice(0, 10);
+
+  // Snapshot the user's real skill counts instead of deriving them from a
+  // hardcoded total of 10.
+  const [skillCountRows] = await pool.query(
+    `SELECT
+       COUNT(*) AS total_skills,
+       COALESCE(SUM(CASE WHEN proficiency IN ('advanced', 'expert') THEN 1 ELSE 0 END), 0) AS completed_skills
+     FROM user_skills
+     WHERE user_id = ?`,
+    [userId]
+  );
+  const skillCounts = (skillCountRows as any[])[0] || {};
+  const totalSkillsCount = Number(skillCounts.total_skills || 0);
+  const skillsCompletedCount = Number(skillCounts.completed_skills || 0);
 
   await pool.query(
     `INSERT INTO user_progress
@@ -1541,8 +1534,8 @@ async saveUserProgress(
       today,
       data.overallCareerReadiness,
       data.roadmapProgressPct,
-      Math.round((data.skillsProgressPct / 100) * 10),
-      10,
+      skillsCompletedCount,
+      totalSkillsCount,
       data.projectsCompletedCount,
       data.learningHoursTotal
     ]
@@ -1550,6 +1543,113 @@ async saveUserProgress(
 
   return data;
 }
+
+  // ------------------------------------------------------------------
+  // Startup seeding
+  // ------------------------------------------------------------------
+  /**
+   * Inserts the built-in catalog data (careers + their skills, projects,
+   * courses), but ONLY into empty tables, so restarts never duplicate or
+   * overwrite real data. Failures are logged, never thrown, so a seeding
+   * problem cannot crash server startup. No user accounts are seeded:
+   * a demo account with a publicly known password would be a security hole.
+   */
+  async seedCatalogData(): Promise<void> {
+    try {
+      const [careerCountRows] = await pool.query('SELECT COUNT(*) AS count FROM careers');
+      if (Number((careerCountRows as any[])[0]?.count || 0) === 0) {
+        for (const career of INITIAL_CAREERS) {
+          await pool.query(
+            `INSERT INTO careers
+             (id, slug, title, category, description, average_salary,
+              growth_outlook, difficulty_level, typical_responsibilities,
+              tools_and_technologies)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              career.id,
+              career.slug,
+              career.title,
+              career.category,
+              career.description,
+              career.averageSalary,
+              career.growthOutlook,
+              career.difficultyLevel,
+              JSON.stringify(career.typicalResponsibilities),
+              JSON.stringify(career.toolsAndTechnologies)
+            ]
+          );
+
+          for (const skillName of career.requiredSkills) {
+            await pool.query(
+              `INSERT INTO career_skills (id, career_id, skill_name, is_required)
+               VALUES (?, ?, ?, ?)`,
+              [randomUUID(), career.id, skillName, true]
+            );
+          }
+          for (const skillName of career.recommendedSkills) {
+            await pool.query(
+              `INSERT INTO career_skills (id, career_id, skill_name, is_required)
+               VALUES (?, ?, ?, ?)`,
+              [randomUUID(), career.id, skillName, false]
+            );
+          }
+        }
+        console.log(`[NexLeaf] Seeded ${INITIAL_CAREERS.length} careers into the database.`);
+      }
+
+      const [projectCountRows] = await pool.query('SELECT COUNT(*) AS count FROM projects');
+      if (Number((projectCountRows as any[])[0]?.count || 0) === 0) {
+        for (const project of INITIAL_PROJECTS) {
+          await pool.query(
+            `INSERT INTO projects
+             (id, title, career_category, difficulty, estimated_hours,
+              skills_learned, technologies, description, deliverables)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              project.id,
+              project.title,
+              project.careerCategory,
+              project.difficulty,
+              project.estimatedHours,
+              JSON.stringify(project.skillsLearned),
+              JSON.stringify(project.technologies),
+              project.description,
+              JSON.stringify(project.deliverables)
+            ]
+          );
+        }
+        console.log(`[NexLeaf] Seeded ${INITIAL_PROJECTS.length} projects into the database.`);
+      }
+
+      const [courseCountRows] = await pool.query('SELECT COUNT(*) AS count FROM courses');
+      if (Number((courseCountRows as any[])[0]?.count || 0) === 0) {
+        for (const course of INITIAL_COURSES) {
+          await pool.query(
+            `INSERT INTO courses
+             (id, title, category, skill_name, difficulty, duration,
+              resource_type, provider, url, description)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              course.id,
+              course.title,
+              course.category,
+              course.skillName,
+              course.difficulty,
+              course.duration,
+              course.resourceType,
+              course.provider,
+              course.url,
+              course.description
+            ]
+          );
+        }
+        console.log(`[NexLeaf] Seeded ${INITIAL_COURSES.length} courses into the database.`);
+      }
+
+    } catch (error) {
+      console.error('[NexLeaf] Catalog seeding failed (server will continue without seed data):', error);
+    }
+  }
   /**
    * Generates a complete MySQL DDL and DML export script for the BCA final project
    */

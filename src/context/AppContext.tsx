@@ -170,8 +170,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const logout = () => {
   tokenStorage.clear();
 
-  // Clear the current user and session data
+  // Clear the current user AND every cached piece of their app data, so a
+  // previous user's profile, skills, roadmap, resume, gaps, matches and
+  // progress are never left visible after logout / to the next user.
   setUser(null);
+  setProfile(null);
+  setSkills([]);
+  setRoadmap(null);
+  setResumeAnalysis(null);
+  setSkillGaps([]);
+  setCareerMatches([]);
+  setProgressData(null);
+  setAiRecommendation(null);
+  setSelectedCareerSlug(null);
 
   // Return to the public landing page
   setActivePage('landing');

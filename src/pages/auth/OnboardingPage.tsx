@@ -143,19 +143,10 @@ export const OnboardingPage: React.FC = () => {
         showToast('Personalized AI career analysis ready!', 'success');
       }, 4500);
     } catch (error: any) {
-      console.warn('Register fallback, logging in with existing or demo user', error);
-      // Fallback: Login demo user if email exists
-      setTimeout(() => {
-        setIsProcessing(false);
-        api.auth.login({ email: 'alex.sharma@example.com', password: 'Password123!' })
-          .then((res) => {
-            login(res.token, res.user, res.profile);
-            showToast('AI analysis generated successfully!', 'success');
-          })
-          .catch(() => {
-            showToast('Ready! Exploring dashboard.', 'success');
-          });
-      }, 3500);
+      // Fail honestly: never log the user in as the demo account or claim
+      // success when registration itself failed.
+      setIsProcessing(false);
+      showToast(error.message || 'Registration failed. Please try again.', 'error');
     }
   };
 

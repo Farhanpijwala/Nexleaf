@@ -1,19 +1,32 @@
 import express, { Request, Response, NextFunction } from 'express';
+import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { db } from './db.js';
 import { analyzeResumeWithGemini, generateSkillGapsWithGemini, getCareerCoachResponse } from './gemini.js';
-import { Roadmap, RoadmapTask, UserSkill } from './types.js';
+import { CareerMatch, Roadmap, RoadmapTask, UserProgressData, UserSkill } from './types.js';
 import { pool } from './mysql.js';  
 
 const router = express.Router();
-   if (!process.env.JWT_SECRET) {
-     throw new Error('JWT_SECRET environment variable is required');
-   }
-   const JWT_SECRET: string = process.env.JWT_SECRET;
 
-// Auth middleware: extracts user from Bearer token or defaults to demo user
-export async function authenticate(req: Request, res: Response, next: NextFunction) {
+// Wraps an async route handler so a rejected promise is forwarded to the
+// central error middleware instead of crashing the process with an
+// unhandled rejection (Express 4 does not catch async errors itself).
+const asyncHandler =
+  (fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>) =>
+  (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+if (!process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET environment variable is required');
+}
+if (process.env.JWT_SECRET === 'MY_JWT_SECRET') {
+  throw new Error('JWT_SECRET is still set to the placeholder value from .env.example; set a real secret');
+}
+const JWT_SECRET: string = process.env.JWT_SECRET;
+
+// Auth middleware: extracts the user from the Bearer token
+async function authenticateHandler(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
@@ -32,10 +45,12 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
  return res.status(401).json({ error: 'Authentication required' });
 }
 
+export const authenticate = asyncHandler(authenticateHandler);
+
 // ------------------------------------------------------------------
 // AUTH ROUTES
 // ------------------------------------------------------------------
-router.post('/auth/register', async (req: Request, res: Response) => {
+router.post('/auth/register', asyncHandler(async (req: Request, res: Response) => {
   const { email, password, fullName, education, currentRole, targetCareer, skills, learningAvailability } = req.body;
 
   if (!email || !password || !fullName) {
@@ -62,7 +77,7 @@ const newUser = await db.createUser({
 
   const chosenTargetCareer = targetCareer || 'Frontend Developer';
 
-  db.saveProfile({
+  await db.saveProfile({
     id: `prof_${userId}`,
     userId,
     bio: `Aspiring ${chosenTargetCareer} focused on modern technologies and industry best practices.`,
@@ -75,14 +90,14 @@ const newUser = await db.createUser({
 
   // Add initial skills if provided
   if (Array.isArray(skills)) {
-    skills.forEach((skillName: string) => {
-      db.addUserSkill(userId, {
+    for (const skillName of skills) {
+      await db.addUserSkill(userId, {
         skillName,
         proficiency: 'intermediate',
         source: 'manual',
         verified: false
       });
-    });
+    }
   }
 
   // Create initial roadmap for the user
@@ -122,7 +137,7 @@ const newUser = await db.createUser({
       }
     ]
   };
-  db.saveRoadmap(initialRoadmap);
+  await db.saveRoadmap(initialRoadmap);
 
   const token = jwt.sign({ userId }, JWT_SECRET, { expiresIn: '7d' });
   const { passwordHash: _, ...safeUser } = newUser;
@@ -130,11 +145,11 @@ const newUser = await db.createUser({
   res.status(201).json({
     token,
     user: safeUser,
-    profile: db.getProfile(userId)
+    profile: await db.getProfile(userId)
   });
-});
+}));
 
-router.post('/auth/login', async (req: Request, res: Response) => {
+router.post('/auth/login', asyncHandler(async (req: Request, res: Response) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -157,37 +172,52 @@ router.post('/auth/login', async (req: Request, res: Response) => {
   res.json({
     token,
     user: safeUser,
-    profile: db.getProfile(user.id)
+    profile: await db.getProfile(user.id)
   });
-});
+}));
 
-router.get('/auth/me', authenticate, async (req: Request, res: Response) => {
+router.get('/auth/me', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
   const { passwordHash: _, ...safeUser } = user;
   res.json({
     user: safeUser,
-    profile: db.getProfile(user.id)
+    profile: await db.getProfile(user.id)
   });
-});
+}));
+
+// Recomputes the user's progress and stores today's snapshot. Best-effort:
+// a snapshot failure is logged but must not fail the request that
+// triggered it.
+async function snapshotUserProgress(userId: string, precomputed?: UserProgressData): Promise<void> {
+  try {
+    const progress = precomputed ?? (await db.getUserProgress(userId));
+    await db.saveUserProgress(userId, progress);
+  } catch (error) {
+    console.error('[NexLeaf API] Failed to save progress snapshot:', error);
+  }
+}
 
 // ------------------------------------------------------------------
 // PROFILE ROUTES
 // ------------------------------------------------------------------
-router.get('/profile', authenticate, async (req: Request, res: Response) => {
+router.get('/profile', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const profile = await db.getProfile(user.id);
  const skills = await db.getUserSkills(user.id);
 
-  res.json({ user, profile, skills });
-});
+  // Never send the password hash to the client
+  const { passwordHash: _, ...safeUser } = user;
 
-router.put('/profile', authenticate, async (req: Request, res: Response) => {
+  res.json({ user: safeUser, profile, skills });
+}));
+
+router.put('/profile', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const { fullName, education, currentRole, bio, targetCareer, experienceLevel, learningHoursPerDay, githubUrl, linkedinUrl, portfolioUrl } = req.body;
 
   if (fullName || education || currentRole) {
-    db.updateUser(user.id, {
+    await db.updateUser(user.id, {
       ...(fullName && { fullName }),
       ...(education && { education }),
       ...(currentRole && { currentRole })
@@ -195,7 +225,7 @@ router.put('/profile', authenticate, async (req: Request, res: Response) => {
   }
 
 const existingProfile = await db.getProfile(user.id);
-  const updatedProfile = db.saveProfile({
+  const updatedProfile = await db.saveProfile({
     id: existingProfile?.id || `prof_${user.id}`,
     userId: user.id,
     bio: bio !== undefined ? bio : existingProfile?.bio || '',
@@ -213,18 +243,18 @@ const updatedUser = await db.getUserById(user.id);
   const { passwordHash: _, ...safeUser } = updatedUser!;
 
   res.json({ user: safeUser, profile: updatedProfile });
-});
+}));
 
 // ------------------------------------------------------------------
 // SKILLS ROUTES
 // ------------------------------------------------------------------
-router.get('/skills', authenticate, async (req: Request, res: Response) => {
+router.get('/skills', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const skills = await db.getUserSkills(user.id);
   res.json(skills);
-});
+}));
 
-router.post('/skills', authenticate, (req: Request, res: Response) => {
+router.post('/skills', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const { skillName, proficiency, source } = req.body;
 
@@ -232,7 +262,19 @@ router.post('/skills', authenticate, (req: Request, res: Response) => {
     return res.status(400).json({ error: 'skillName is required' });
   }
 
-  const newSkill = db.addUserSkill(user.id, {
+  // Validate against the user_skills ENUMs: an unvalidated value makes the
+  // INSERT fail at the database instead of producing a clean 400 here.
+  const validProficiencies = ['beginner', 'intermediate', 'advanced'];
+  const validSources = ['manual', 'resume_detected', 'assessment'];
+
+  if (proficiency !== undefined && !validProficiencies.includes(proficiency)) {
+    return res.status(400).json({ error: `proficiency must be one of: ${validProficiencies.join(', ')}` });
+  }
+  if (source !== undefined && !validSources.includes(source)) {
+    return res.status(400).json({ error: `source must be one of: ${validSources.join(', ')}` });
+  }
+
+  const newSkill = await db.addUserSkill(user.id, {
     skillName,
     proficiency: proficiency || 'intermediate',
     source: source || 'manual',
@@ -240,9 +282,9 @@ router.post('/skills', authenticate, (req: Request, res: Response) => {
   });
 
   res.status(201).json(newSkill);
-});
+}));
 
-router.delete('/skills/:id', authenticate, async (req: Request, res: Response) => {
+router.delete('/skills/:id', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
  const success = await db.removeUserSkill(user.id, req.params.id);
   if (success) {
@@ -250,7 +292,7 @@ router.delete('/skills/:id', authenticate, async (req: Request, res: Response) =
   } else {
     res.status(404).json({ error: 'Skill not found' });
   }
-});
+}));
 
 // ------------------------------------------------------------------
 // RESUME ROUTES
@@ -261,7 +303,7 @@ router.get('/resume/analysis', authenticate,async  (req: Request, res: Response)
   res.json(analysis || null);
 });
 
-router.post('/resume/analyze', authenticate, async (req: Request, res: Response) => {
+router.post('/resume/analyze', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const profile = await db.getProfile(user.id);
   const { resumeText, fileName } = req.body;
@@ -277,20 +319,23 @@ router.post('/resume/analyze', authenticate, async (req: Request, res: Response)
 
     await db.saveResumeAnalysis(analysis, resumeText);
     // Auto-sync detected skills into user skills
-    analysis.detectedSkills.forEach((skillName) => {
-      db.addUserSkill(user.id, {
+    for (const skillName of analysis.detectedSkills) {
+      await db.addUserSkill(user.id, {
         skillName,
         proficiency: 'intermediate',
         source: 'resume_detected',
         verified: true
       });
-    });
+    }
 
     res.json(analysis);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to analyze resume' });
+    // The analyzer throws when the AI service is missing/failing instead of
+    // returning a fabricated analysis, so surface that honestly as 503 and
+    // persist nothing.
+    res.status(503).json({ error: error.message || 'AI resume analysis is unavailable' });
   }
-});
+}));
 
 // ------------------------------------------------------------------
 // CAREER ASSESSMENT ROUTES
@@ -305,7 +350,7 @@ router.get('/assessment/result', authenticate,async  (req: Request, res: Respons
   res.json(result || null);
 });
 
-router.post('/assessment/submit', authenticate, async (req: Request, res: Response) => {
+router.post('/assessment/submit', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const { answers } = req.body; // map of questionId -> points object
 
@@ -334,18 +379,31 @@ router.post('/assessment/submit', authenticate, async (req: Request, res: Respon
   // Normalize scores to max 100
   frontendScore = Math.min(96, Math.max(40, frontendScore));
   backendScore = Math.min(94, Math.max(35, backendScore));
+  fullstackScore = Math.min(95, Math.max(38, fullstackScore));
   dataScore = Math.min(92, Math.max(30, dataScore));
   securityScore = Math.min(90, Math.max(25, securityScore));
   cloudScore = Math.min(90, Math.max(30, cloudScore));
   uiuxScore = Math.min(95, Math.max(40, uiuxScore));
 
-  const topCareerTrack = frontendScore >= backendScore ? 'Frontend Developer' : 'Full Stack Developer';
+  // The top track and fit score must consider every scored domain — using
+  // only frontend vs backend mislabels users whose strength is elsewhere.
+  const domainScores: Array<{ track: string; score: number }> = [
+    { track: 'Frontend Developer', score: frontendScore },
+    { track: 'Backend Developer', score: backendScore },
+    { track: 'Full Stack Developer', score: fullstackScore },
+    { track: 'Data Analyst', score: dataScore },
+    { track: 'Cybersecurity Analyst', score: securityScore },
+    { track: 'Cloud Engineer', score: cloudScore },
+    { track: 'UI/UX Designer', score: uiuxScore }
+  ];
+  const topDomain = domainScores.reduce((best, cur) => (cur.score > best.score ? cur : best));
+  const topCareerTrack = topDomain.track;
 
   const assessmentResult = {
     id: `asm_${Date.now()}`,
     userId: user.id,
     completedAt: new Date().toISOString(),
-    fitScore: Math.max(frontendScore, backendScore, dataScore),
+    fitScore: topDomain.score,
     topCareerTrack,
     radarScores: [
       { domain: 'Frontend Development', score: frontendScore },
@@ -355,7 +413,7 @@ router.post('/assessment/submit', authenticate, async (req: Request, res: Respon
       { domain: 'Security', score: securityScore },
       { domain: 'Cloud & Infrastructure', score: cloudScore }
     ],
-    aiSummary: `Your assessment highlights exceptional aptitude for user-facing architecture, intuitive interactions, and component design (${frontendScore}% fit). Pairing this with clean API integration will maximize your placement advantages.`,
+    aiSummary: `Your assessment highlights your strongest fit as ${topCareerTrack} (${topDomain.score}% fit), based on how your answers scored across all seven domains. Pairing this strength with clean API integration will maximize your placement advantages.`,
     nextSteps: [
       'Focus on modern React functional state, hooks, and clean TypeScript types.',
       'Complete 2 full-scale portfolio projects demonstrating REST API integration.',
@@ -390,31 +448,80 @@ router.post('/assessment/submit', authenticate, async (req: Request, res: Respon
 
  
   res.json(assessmentResult);
-});
+}));
 
 // ------------------------------------------------------------------
 // CAREERS & MATCHES ROUTES
 // ------------------------------------------------------------------
-router.get('/careers', async (req: Request, res: Response) => {
+router.get('/careers', asyncHandler(async (req: Request, res: Response) => {
   const careers = await db.getCareers();
   res.json(careers);
-});
-router.get('/careers/:slug', async (req: Request, res: Response) => {
+}));
+router.get('/careers/:slug', asyncHandler(async (req: Request, res: Response) => {
   const career = await db.getCareerBySlug(req.params.slug);
   if (!career) return res.status(404).json({ error: 'Career path not found' });
   res.json(career);
-});
+}));
 
-router.get('/careers-matches', authenticate, async (req: Request, res: Response) => {
+router.get('/careers-matches', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
-  const matches = await db.getCareerMatches(user.id);
+  let matches = await db.getCareerMatches(user.id);
+
+  if (matches.length === 0) {
+    // Nothing stored yet: compute matches from the catalog and the user's
+    // actual skills, persist them, and return the saved result.
+    const [careers, skills] = await Promise.all([
+      db.getCareers(),
+      db.getUserSkills(user.id)
+    ]);
+
+    if (careers.length > 0) {
+      const userSkillNames = new Set(skills.map((s) => s.skillName.toLowerCase()));
+
+      const computed: CareerMatch[] = careers.map((career) => {
+        const matchingSkills = career.requiredSkills.filter((skill) =>
+          userSkillNames.has(skill.toLowerCase())
+        );
+        const missingSkills = career.requiredSkills.filter(
+          (skill) => !userSkillNames.has(skill.toLowerCase())
+        );
+        const matchPercentage =
+          career.requiredSkills.length > 0
+            ? Math.round((matchingSkills.length / career.requiredSkills.length) * 100)
+            : 0;
+
+        return {
+          id: randomUUID(),
+          userId: user.id,
+          careerTitle: career.title,
+          slug: career.slug,
+          matchPercentage,
+          whyMatches:
+            matchingSkills.length > 0
+              ? `You already have ${matchingSkills.length} of the ${career.requiredSkills.length} required skills: ${matchingSkills.join(', ')}.`
+              : `A fresh starting point: none of the ${career.requiredSkills.length} required skills are on your profile yet.`,
+          currentMatchingSkills: matchingSkills,
+          missingSkills,
+          learningDifficulty: career.difficultyLevel,
+          recommendedNextStep:
+            missingSkills.length > 0
+              ? `Start learning ${missingSkills[0]} to raise your match for ${career.title}.`
+              : `Deepen your portfolio projects to showcase your ${career.title} skills.`
+        };
+      });
+
+      computed.sort((a, b) => b.matchPercentage - a.matchPercentage);
+      matches = await db.saveCareerMatches(user.id, computed);
+    }
+  }
+
   res.json(matches);
-});
+}));
 
 // ------------------------------------------------------------------
 // SKILL GAPS ROUTES
 // ------------------------------------------------------------------
-router.get('/skills/gaps', authenticate, async (req: Request, res: Response) => {
+router.get('/skills/gaps', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const profile = await db.getProfile(user.id);
   const targetCareer = profile?.targetCareer || 'Frontend Developer';
@@ -428,9 +535,9 @@ router.get('/skills/gaps', authenticate, async (req: Request, res: Response) => 
 const gaps = await generateSkillGapsWithGemini(targetCareer, skills);
 await db.saveSkillGaps(user.id, gaps);
 res.json(gaps);
-});
+}));
 
-router.post('/skills/gaps/refresh', authenticate, async (req: Request, res: Response) => {
+router.post('/skills/gaps/refresh', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const profile = await db.getProfile(user.id);
   const targetCareer = profile?.targetCareer || 'Frontend Developer';
@@ -439,18 +546,18 @@ router.post('/skills/gaps/refresh', authenticate, async (req: Request, res: Resp
   const gaps = await generateSkillGapsWithGemini(targetCareer, skills);
   await db.saveSkillGaps(user.id, gaps);
   res.json(gaps);
-});
+}));
 
 // ------------------------------------------------------------------
 // ROADMAP ROUTES
 // ------------------------------------------------------------------
-router.get('/roadmap', authenticate, async (req: Request, res: Response) => {
+router.get('/roadmap', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const roadmap = await db.getRoadmap(user.id);
   res.json(roadmap || null);
-});
+}));
 
-router.put('/roadmap/tasks/:id', authenticate, async (req: Request, res: Response) => {
+router.put('/roadmap/tasks/:id', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const { status } = req.body;
 
@@ -467,10 +574,13 @@ router.put('/roadmap/tasks/:id', authenticate, async (req: Request, res: Respons
     return res.status(404).json({ error: 'Roadmap or task not found' });
   }
 
-  res.json(updatedRoadmap);
-});
+  // Task progress changed, so refresh today's progress snapshot too
+  await snapshotUserProgress(user.id);
 
-router.post('/roadmap/regenerate', authenticate, async (req: Request, res: Response) => {
+  res.json(updatedRoadmap);
+}));
+
+router.post('/roadmap/regenerate', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
 const profile = await db.getProfile(user.id);
   const targetCareer = profile?.targetCareer || 'Frontend Developer';
@@ -552,39 +662,41 @@ const profile = await db.getProfile(user.id);
     ]
   };
 
-  db.saveRoadmap(newRoadmap);
-  res.json(newRoadmap);
-});
+  const savedRoadmap = await db.saveRoadmap(newRoadmap);
+  res.json(savedRoadmap);
+}));
 
 // ------------------------------------------------------------------
 // PROJECTS & COURSES ROUTES
 // ------------------------------------------------------------------
-router.get('/projects/recommended', authenticate, async (req: Request, res: Response) => {
+router.get('/projects/recommended', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
  const profile = await db.getProfile(user.id);
   const targetCategory = profile?.targetCareer || 'Frontend Developer';
  const projects = await db.getProjects(targetCategory);
   res.json(projects);
-});
-router.get('/courses/recommended', async (req: Request, res: Response) => {
+}));
+router.get('/courses/recommended', asyncHandler(async (req: Request, res: Response) => {
   const category = req.query.category as string | undefined;
   const courses = await db.getCourses(category);
   res.json(courses);
-});
+}));
 
 // ------------------------------------------------------------------
 // PROGRESS ROUTES
 // ------------------------------------------------------------------
-router.get('/progress', authenticate, async (req: Request, res: Response) => {
+router.get('/progress', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const progress = await db.getUserProgress(user.id);
+  // Persist today's progress snapshot (this is where progress is computed)
+  await snapshotUserProgress(user.id, progress);
   res.json(progress);
-});
+}));
 
 // ------------------------------------------------------------------
 // AI RECOMMENDATION & COACH ROUTES
 // ------------------------------------------------------------------
-router.get('/ai/recommendation', authenticate, async (req: Request, res: Response) => {
+router.get('/ai/recommendation', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
  const profile = await db.getProfile(user.id);
   const roadmap = await db.getRoadmap(user.id);
@@ -603,9 +715,9 @@ router.get('/ai/recommendation', authenticate, async (req: Request, res: Respons
   };
 
   res.json(recommendation);
-});
+}));
 
-router.post('/ai/coach', authenticate, async (req: Request, res: Response) => {
+router.post('/ai/coach', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const profile = await db.getProfile(user.id);
   const skills = await db.getUserSkills(user.id);
@@ -629,7 +741,7 @@ router.post('/ai/coach', authenticate, async (req: Request, res: Response) => {
 
   const coachResponse = await getCareerCoachResponse(message, userContext, chatHistory || []);
   res.json(coachResponse);
-});
+}));
 
 // ------------------------------------------------------------------
 // DATABASE EXPORT FOR COLLEGE PROJECT SUBMISSION
@@ -640,6 +752,18 @@ router.get('/database/schema', authenticate, (req: Request, res: Response) => {
   });
 });
 
-
+// ------------------------------------------------------------------
+// CENTRAL ERROR HANDLER
+// ------------------------------------------------------------------
+// Receives every error forwarded by asyncHandler (and any synchronous
+// throw inside a handler) and always answers with a JSON 500 instead of
+// letting the process die on an unhandled rejection.
+router.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error('[NexLeaf API] Unhandled error:', err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  res.status(500).json({ error: 'Internal server error' });
+});
 
 export default router;

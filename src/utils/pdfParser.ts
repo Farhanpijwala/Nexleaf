@@ -1,54 +1,43 @@
 /**
  * Client-side PDF text extraction utility using PDF.js
  */
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
 export async function extractTextFromPdf(file: File): Promise<string> {
   // If it's a plain text file, read directly
   if (file.type === 'text/plain') {
     return await file.text();
   }
 
-  try {
-    const pdfjsLib = await import('pdfjs-dist');
-    
-    // Configure worker via CDN for reliable bundle-independent loading in Vite
-    if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '4.0.379'}/pdf.worker.min.mjs`;
-    }
+  const pdfjsLib = await import('pdfjs-dist');
 
-    const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdf = await loadingTask.promise;
+  // Use the worker bundled by Vite (see the ?url import above) instead of a
+  // CDN copy, so extraction also works offline and with a pinned version.
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-    let fullText = '';
-    const numPages = pdf.numPages;
+  const arrayBuffer = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+  const pdf = await loadingTask.promise;
 
-    for (let pageNum = 1; pageNum <= Math.min(numPages, 10); pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items
-        .map((item: any) => ('str' in item ? item.str : ''))
-        .join(' ');
-      fullText += `\n--- Page ${pageNum} ---\n` + pageText;
-    }
+  let fullText = '';
+  const numPages = pdf.numPages;
 
-    if (fullText.trim().length > 20) {
-      return fullText.trim();
-    }
-  } catch (error) {
-    console.warn('[PDF.js] Worker or arrayBuffer extraction warning:', error);
+  for (let pageNum = 1; pageNum <= Math.min(numPages, 10); pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map((item: any) => ('str' in item ? item.str : ''))
+      .join(' ');
+    fullText += `\n--- Page ${pageNum} ---\n` + pageText;
   }
 
-  // Graceful fallback: text reader attempt
-  try {
-    const fallbackText = await file.text();
-    // Filter printable ascii characters
-    const clean = fallbackText.replace(/[^\x20-\x7E\t\r\n]/g, ' ');
-    if (clean.length > 50) {
-      return clean.trim();
-    }
-  } catch (err) {
-    console.error('Fallback text extraction failed', err);
+  if (fullText.trim().length > 20) {
+    return fullText.trim();
   }
 
-  return `Resume File: ${file.name} (Uploaded ${new Date().toLocaleDateString()})\nSize: ${(file.size / 1024).toFixed(1)} KB\nCandidate: Alex Sharma\nEducation: Bachelor of Computer Applications\nSkills: HTML5, CSS3, JavaScript, Java, SQL, Git\nTarget Career: Frontend Developer`;
+  // Fail honestly: never substitute invented resume content for a file
+  // whose text could not actually be read.
+  throw new Error(
+    'No readable text could be extracted from this file. Please upload a text-based PDF or a .txt file.'
+  );
 }

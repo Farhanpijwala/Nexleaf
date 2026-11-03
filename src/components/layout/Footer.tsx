@@ -1,6 +1,6 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext.tsx';
-import { Compass, Database, Github, ExternalLink } from 'lucide-react';
+import { Compass, Github } from 'lucide-react';
 
 export const Footer: React.FC = () => {
   const { setActivePage } = useApp();
@@ -90,18 +90,6 @@ export const Footer: React.FC = () => {
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-200 mb-4">Project & Database</h4>
             <ul className="space-y-2.5 text-sm">
-              <li>
-                <a
-                  href="/api/database/schema"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 text-indigo-400 hover:text-indigo-300 transition-colors"
-                >
-                  <Database className="w-3.5 h-3.5" />
-                  MySQL Schema (DDL)
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-              </li>
               <li>
                 <button onClick={() => setActivePage('settings')} className="hover:text-white transition-colors">
                   Architecture Specs

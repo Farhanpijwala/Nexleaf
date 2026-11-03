@@ -49,12 +49,6 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     throw new Error(errorMsg);
   }
 
-  // Handle plain text response for schema export
-  const contentType = response.headers.get('content-type');
-  if (contentType && contentType.includes('text/plain')) {
-    return (await response.text()) as unknown as T;
-  }
-
   return response.json();
 }
 
@@ -176,7 +170,4 @@ export const api = {
       }),
   },
 
-  database: {
-    getSchemaDump: () => request<string>('/database/schema'),
-  },
 };
