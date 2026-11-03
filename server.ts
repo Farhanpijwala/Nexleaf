@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import apiRoutes from './server/routes.js';
+import { db } from './server/db.js';
 
 dotenv.config();
 
@@ -20,6 +21,21 @@ async function startServer() {
 
   // Mount API endpoints
   app.use('/api', apiRoutes);
+
+  // Global error handler (also catches body-parser failures raised before
+  // the router): always answer API errors as JSON, never crash the process.
+  app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error('[NexLeaf] Unhandled error:', err);
+    if (res.headersSent) {
+      return next(err);
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  });
+
+  // Seed catalog data (careers, projects, courses, demo account) into
+  // empty tables. The seeder logs and swallows its own failures, so a
+  // seeding problem never prevents the server from starting.
+  await db.seedCatalogData();
 
   // Health check
   app.get('/api/health', (req, res) => {

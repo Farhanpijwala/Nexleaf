@@ -94,15 +94,6 @@ export const AboutPage: React.FC = () => {
           </div>
 
           <div className="pt-4 flex items-center gap-3">
-            <a
-              href="/api/database/schema"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
-            >
-              <Database className="w-3.5 h-3.5" />
-              View MySQL Relational Schema
-            </a>
             <button
               onClick={() => setActivePage('dashboard')}
               className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-800 rounded-lg text-xs font-semibold transition-colors"

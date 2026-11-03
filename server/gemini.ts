@@ -36,40 +36,11 @@ export async function analyzeResumeWithGemini(
   resumeText: string,
   targetCareer: string = 'Frontend Developer'
 ): Promise<ResumeAnalysis> {
-  const defaultFallback: ResumeAnalysis = {
-    id: `res_ana_${Date.now()}`,
-    userId: 'usr_alex',
-    fileName: 'resume.pdf',
-    fileSizeBytes: 245000,
-    uploadDate: new Date().toISOString().split('T')[0],
-    resumeScore: 78,
-    detectedSkills: ['HTML5', 'CSS3', 'JavaScript (ES6+)', 'Java', 'SQL', 'Git', 'Responsive Design'],
-    experienceSummary: '1 academic internship building web components, 2 college group projects using JavaScript and MySQL.',
-    educationSummary: 'Bachelor of Computer Applications (BCA), expected graduation 2026. Cumulative GPA: 8.6/10.',
-    projectsDetected: ['Personal Portfolio Website', 'Student Record Management System (Java + MySQL)'],
-    strengths: [
-      'Solid programming fundamentals in JavaScript and Java',
-      'Strong structural understanding of relational databases (SQL)',
-      'Practical hands-on version control experience with Git',
-      'Clean academic project documentation'
-    ],
-    missingSkills: ['React', 'TypeScript', 'REST API Integration', 'State Management (Redux/Zustand)', 'Tailwind CSS'],
-    suggestedCareerPaths: [
-      { career: 'Frontend Developer', matchPct: 88, reason: 'Strong JavaScript and CSS foundation; needs modern React and TypeScript to be industry-ready.' },
-      { career: 'Full Stack Developer', matchPct: 76, reason: 'Knows Java backend basics and SQL, but needs Express/Node.js or Spring Boot plus modern frontend framework.' },
-      { career: 'Web Application QA', matchPct: 70, reason: 'Understands frontend DOM, manual testing, and SQL query verification.' }
-    ],
-    improvementSuggestions: [
-      'Add quantifiable metric outcomes to project descriptions (e.g., "Reduced page load time by 30%")',
-      'Include live demo URLs or GitHub repository links for all listed academic projects',
-      'Highlight experience with modern build tools like Vite or Webpack',
-      'Acquire and showcase React and TypeScript skills to bridge the industry standard gap for Frontend roles'
-    ]
-  };
-
+  // There is deliberately no fabricated fallback analysis: if the AI service
+  // is unavailable, the caller must fail honestly (HTTP 503) rather than
+  // persist or skill-sync invented results for a real user's resume.
   if (!ai) {
-    console.log('[Gemini] No GEMINI_API_KEY configured. Returning high-fidelity algorithmic analysis.');
-    return defaultFallback;
+    throw new Error('AI resume analysis is unavailable: GEMINI_API_KEY is not configured on the server.');
   }
 
   try {
@@ -140,7 +111,9 @@ Perform a thorough, objective analysis. Return JSON adhering to this structure:
     });
 
     const text = response.text;
-    if (!text) return defaultFallback;
+    if (!text) {
+      throw new Error('AI resume analysis failed: the AI service returned an empty response.');
+    }
     const parsed = JSON.parse(cleanJsonText(text));
 
     return {
@@ -149,19 +122,19 @@ Perform a thorough, objective analysis. Return JSON adhering to this structure:
       fileName: 'uploaded_resume.pdf',
       fileSizeBytes: resumeText.length,
       uploadDate: new Date().toISOString().split('T')[0],
-      resumeScore: Math.min(100, Math.max(20, parsed.resumeScore || 75)),
-      detectedSkills: parsed.detectedSkills || defaultFallback.detectedSkills,
-      experienceSummary: parsed.experienceSummary || defaultFallback.experienceSummary,
-      educationSummary: parsed.educationSummary || defaultFallback.educationSummary,
-      projectsDetected: parsed.projectsDetected || defaultFallback.projectsDetected,
-      strengths: parsed.strengths || defaultFallback.strengths,
-      missingSkills: parsed.missingSkills || defaultFallback.missingSkills,
-      suggestedCareerPaths: parsed.suggestedCareerPaths || defaultFallback.suggestedCareerPaths,
-      improvementSuggestions: parsed.improvementSuggestions || defaultFallback.improvementSuggestions
+      resumeScore: Math.min(100, Math.max(0, parsed.resumeScore ?? 0)),
+      detectedSkills: parsed.detectedSkills || [],
+      experienceSummary: parsed.experienceSummary || '',
+      educationSummary: parsed.educationSummary || '',
+      projectsDetected: parsed.projectsDetected || [],
+      strengths: parsed.strengths || [],
+      missingSkills: parsed.missingSkills || [],
+      suggestedCareerPaths: parsed.suggestedCareerPaths || [],
+      improvementSuggestions: parsed.improvementSuggestions || []
     };
   } catch (error) {
     console.error('[Gemini] Error analyzing resume:', error);
-    return defaultFallback;
+    throw new Error('AI resume analysis failed. Please try again later.');
   }
 }
 

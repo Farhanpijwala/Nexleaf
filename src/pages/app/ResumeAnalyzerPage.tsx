@@ -65,9 +65,13 @@ export const ResumeAnalyzerPage: React.FC = () => {
   };
 
   const handleAnalyze = async () => {
-    const textToAnalyze =
-      extractedTextPreview ||
-      `Alex Sharma - BCA Student (Final Year)\nSkills: HTML5, CSS3, JavaScript (ES6+), Java, SQL, Git & GitHub\nTarget: Frontend Developer\nProjects: Personal Developer Portfolio, College Attendance System in Java & MySQL.`;
+    // Never analyze sample/invented text in place of the user's own resume:
+    // without extracted text there is nothing honest to analyze.
+    if (!extractedTextPreview.trim()) {
+      showToast('Please upload a resume file first — its text could not be read yet.', 'error');
+      return;
+    }
+    const textToAnalyze = extractedTextPreview;
 
     setIsAnalyzing(true);
     try {
@@ -82,7 +86,7 @@ export const ResumeAnalyzerPage: React.FC = () => {
   };
 
   const currentAnalysis = resumeAnalysis;
-  const score = currentAnalysis?.resumeScore || 78;
+  const score = currentAnalysis?.resumeScore ?? 0;
 
   const scoreChartData = [{ name: 'Score', value: score, fill: score >= 80 ? '#10b981' : score >= 60 ? '#4f46e5' : '#f59e0b' }];
 

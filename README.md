@@ -42,7 +42,7 @@ An AI-powered career navigation platform that helps users explore career paths, 
 ## Project Structure
 
 ```
-ai-career-navigator/
+Nexleaf/
 ├── src/            # React frontend
 ├── server/         # Express backend code
 ├── server.ts       # Server entry point
@@ -62,8 +62,8 @@ ai-career-navigator/
 ### Installation
 
 ```bash
-git clone https://github.com/Farhanpijwala/ai-career-navigator.git
-cd ai-career-navigator
+git clone https://github.com/Farhanpijwala/Nexleaf.git
+cd Nexleaf
 npm install
 ```
 
@@ -78,10 +78,11 @@ cp .env.example .env
 | Variable | Purpose |
 | --- | --- |
 | `GEMINI_API_KEY` | Google Gemini API key |
-| `DB_HOST` | MySQL host (for example `localhost`) |
-| `DB_USER` | MySQL username |
-| `DB_PASSWORD` | MySQL password |
-| `DB_NAME` | Database name (`nexleaf_db`) |
+| `MYSQL_HOST` | MySQL host (for example `localhost`) |
+| `MYSQL_USER` | MySQL username |
+| `MYSQL_PASSWORD` | MySQL password |
+| `MYSQL_DATABASE` | Database name (`nexleaf_db`) |
+| `MYSQL_PORT` | MySQL port (for example `3306`) |
 | `JWT_SECRET` | Secret used to sign login tokens |
 
 > ⚠️ Replace the variable names in this table with the exact names in your `.env.example`. Never commit your real `.env` file.

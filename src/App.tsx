@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AppProvider, useApp, ActivePage } from './context/AppContext.tsx';
 import { Navbar } from './components/layout/Navbar.tsx';
 import { Footer } from './components/layout/Footer.tsx';
@@ -100,9 +100,16 @@ const AppContent: React.FC = () => {
         return <LandingPage />;
     }
   };
-// Prevent logged-out users from accessing protected pages
+// Prevent logged-out users from accessing protected pages. The redirect
+// must run in an effect — calling setActivePage during render is a React
+// anti-pattern that triggers "cannot update a component while rendering".
+useEffect(() => {
+  if (!isPublicPage && !isLoading && !user) {
+    setActivePage('login');
+  }
+}, [isPublicPage, isLoading, user, setActivePage]);
+
 if (!isPublicPage && !isLoading && !user) {
-  setActivePage('login');
   return null;
 }
   if (isPublicPage) {

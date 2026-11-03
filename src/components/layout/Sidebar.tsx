@@ -15,9 +15,7 @@ import {
   BotMessageSquare,
   Settings,
   LogOut,
-  Database,
-  Flame,
-  ChevronRight
+  Flame
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -130,18 +128,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
 
       {/* Bottom Footer Actions */}
       <div className="p-3 border-t border-slate-800/80 space-y-1">
-        <a
-          href="/api/database/schema"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors"
-        >
-          <div className="flex items-center gap-2.5">
-            <Database className="w-3.5 h-3.5 text-indigo-400" />
-            <span>MySQL Schema DDL</span>
-          </div>
-          <ChevronRight className="w-3.5 h-3.5 text-slate-600" />
-        </a>
 
         <button
           onClick={logout}

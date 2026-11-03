@@ -31,22 +31,6 @@ export const LoginPage: React.FC = () => {
     }
   };
 
-  const handleDemoLogin = async () => {
-    setIsSubmitting(true);
-    try {
-      const res = await api.auth.login({
-        email: 'alex.sharma@example.com',
-        password: 'Password123!'
-      });
-      login(res.token, res.user, res.profile);
-      showToast('Logged in with Alex Sharma demo profile', 'success');
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Demo login failed');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center space-y-2">
